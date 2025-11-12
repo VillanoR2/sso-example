@@ -135,6 +135,74 @@ Notas:
 - Express escucha en todas las interfaces por defecto (`0.0.0.0`) cuando llamas `app.listen(puerto)`, por lo que no necesitas cambios de código para acceso externo.
 - Si usas NAT sin reglas, no será accesible desde fuera. Usa Bridged o configura Port Forwarding.
 
+## SSL con Caddy + DuckDNS
+Objetivo: exponer `client` e `idp` con HTTPS usando Caddy como reverse proxy y un subdominio de DuckDNS.
+
+1) Crear subdominios en DuckDNS
+- Regístrate en https://www.duckdns.org y crea subdominios, por ejemplo:
+  - `app-<tusiglas>.duckdns.org` para el Cliente
+  - `idp-<tusiglas>.duckdns.org` para el IdP
+- Guarda tu `token` de DuckDNS.
+
+2) Actualizar IP pública en DuckDNS
+- Crea un script de actualización (cada 5 min):
+```bash
+mkdir -p ~/duckdns
+cat > ~/duckdns/duck.sh << 'EOF'
+#!/usr/bin/env bash
+DOMAINS="app-<tusiglas>,idp-<tusiglas>"   # sin .duckdns.org
+TOKEN="<TU_TOKEN>"
+echo url="https://www.duckdns.org/update?domains=${DOMAINS}&token=${TOKEN}&ip=" | curl -k -o ~/duckdns/duck.log -K -
+EOF
+chmod +x ~/duckdns/duck.sh
+crontab -l 2>/dev/null; echo "*/5 * * * * ~/duckdns/duck.sh >/dev/null 2>&1" | crontab -
+```
+
+3) Abrir firewall y puertos para ACME
+```bash
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw status
+```
+
+4) Instalar Caddy (Ubuntu)
+```bash
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update && sudo apt install -y caddy
+```
+
+5) Configurar Caddyfile
+- Edita `/etc/caddy/Caddyfile` y apunta a los servicios locales:
+```
+app-<tusiglas>.duckdns.org {
+    reverse_proxy 127.0.0.1:3000
+}
+
+idp-<tusiglas>.duckdns.org {
+    reverse_proxy 127.0.0.1:4000
+}
+```
+- Aplica cambios: `sudo systemctl reload caddy` (o `sudo systemctl restart caddy`).
+
+6) Ajustar `.env` a HTTPS y dominios
+- `client/.env`:
+  - `IDP_BASE=https://idp-<tusiglas>.duckdns.org`
+  - `BASE_URL=https://app-<tusiglas>.duckdns.org`
+- `idp/.env`:
+  - `BASE_URL=https://idp-<tusiglas>.duckdns.org`
+
+7) Cookies seguras detrás de proxy (recomendado)
+- En producción, usa `secure: true` en las cookies de sesión y activa `trust proxy` en Express:
+  - Cliente (`client/server.js`): `app.set('trust proxy', 1)` y en la config de `session` poner `cookie.secure: true`.
+  - IdP (`idp/server.js`): idem.
+- Con Caddy terminando TLS, el tráfico entre Caddy y Node es local (HTTP) pero el cliente navega por HTTPS, por eso es necesario `trust proxy` para que Express marque cookies `secure` correctamente.
+
+8) Verificación
+- Abre `https://app-<tusiglas>.duckdns.org` y realiza el flujo de login (debe redirigir a `https://idp-<tusiglas>.duckdns.org/login`).
+- Certificados deberían generarse automáticamente (Let’s Encrypt, desafío HTTP-01 en puerto 80).
+
 ## Flujo (resumen)
 1) El cliente hace GET a `/login` → redirige a `IDP /authorize` con `client_id`, `redirect_uri` y `state` aleatorio guardado en sesión.
 2) Si no hay sesión en el IdP, el usuario inicia sesión en `/login` (IdP).
