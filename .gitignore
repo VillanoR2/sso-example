@@ -140,6 +140,5 @@ vite.config.ts.timestamp-*
 /md
 */node_modules
 /sso-mini-desde-cero.md
-/sso-mini-desde-cero.pdf
 /temp_client_server.js
 /test-results.json
